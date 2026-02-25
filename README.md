@@ -3,7 +3,7 @@
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Kenny0029/baidu-ocr-web)
 
 Web UI for Baidu OCR:
-- Upload PDF or image folder
+- Upload PDF
 - Input API_KEY and SECRET_KEY
 - Track progress
 - Download CSV result

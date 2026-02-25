@@ -27,8 +27,6 @@ BASE_DIR = Path(__file__).resolve().parent
 RUNS_DIR = BASE_DIR / "web_runs"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
-ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
-
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
@@ -71,10 +69,8 @@ def create_task(task_id: str, output_name: str) -> None:
 def run_ocr_task(
     *,
     task_id: str,
-    input_mode: str,
-    pdf_path: Path | None,
+    pdf_path: Path,
     images_dir: Path,
-    image_paths: list[Path],
     api_key: str,
     secret_key: str,
     layout: str,
@@ -89,11 +85,8 @@ def run_ocr_task(
         update_task(task_id, status="running", progress=3, message="正在连接百度 OCR 服务")
         access_token = get_access_token(api_key=api_key, secret_key=secret_key, timeout=60.0)
 
-        if input_mode == "pdf":
-            if not pdf_path:
-                raise OCRRequestError("missing pdf input")
-            update_task(task_id, progress=8, message="正在将 PDF 转换为图片")
-            image_paths = convert_pdf_to_images(pdf_path=pdf_path, images_dir=images_dir, dpi=dpi)
+        update_task(task_id, progress=8, message="正在将 PDF 转换为图片")
+        image_paths = convert_pdf_to_images(pdf_path=pdf_path, images_dir=images_dir, dpi=dpi)
 
         if not image_paths:
             raise OCRRequestError("未检测到可识别的图片")
@@ -175,28 +168,6 @@ def save_pdf_upload(task_dir: Path) -> Path:
     return pdf_path
 
 
-def save_image_uploads(task_dir: Path) -> list[Path]:
-    files = request.files.getlist("image_files")
-    if not files:
-        raise OCRRequestError("请上传图片文件夹")
-
-    saved: list[Path] = []
-    for idx, file in enumerate(files, start=1):
-        if not file.filename:
-            continue
-        suffix = Path(file.filename).suffix.lower()
-        if suffix not in ALLOWED_IMAGE_EXTS:
-            continue
-        base_name = secure_filename(Path(file.filename).name) or f"image_{idx}{suffix or '.png'}"
-        dst = task_dir / f"{idx:04d}_{base_name}"
-        file.save(dst)
-        saved.append(dst)
-
-    if not saved:
-        raise OCRRequestError("未检测到有效图片，请上传 png/jpg/jpeg/tif 等格式")
-    return saved
-
-
 @app.get("/")
 def index() -> str:
     return render_template("index.html")
@@ -205,10 +176,6 @@ def index() -> str:
 @app.post("/api/start")
 def api_start() -> Any:
     try:
-        input_mode = (request.form.get("input_mode") or "pdf").strip()
-        if input_mode not in {"pdf", "images"}:
-            raise OCRRequestError("input_mode 必须是 pdf 或 images")
-
         api_key = (request.form.get("api_key") or "").strip()
         secret_key = (request.form.get("secret_key") or "").strip()
         if not api_key or not secret_key:
@@ -231,26 +198,16 @@ def api_start() -> Any:
         input_dir.mkdir(parents=True, exist_ok=True)
         images_dir.mkdir(parents=True, exist_ok=True)
 
-        pdf_path: Path | None = None
-        image_paths: list[Path] = []
-        output_name = "ocr_result.csv"
-
-        if input_mode == "pdf":
-            pdf_path = save_pdf_upload(input_dir)
-            output_name = f"{pdf_path.stem}_ocr.csv"
-        else:
-            image_paths = save_image_uploads(input_dir)
-            output_name = "images_ocr.csv"
+        pdf_path = save_pdf_upload(input_dir)
+        output_name = f"{pdf_path.stem}_ocr.csv"
 
         create_task(task_id=task_id, output_name=output_name)
         thread = threading.Thread(
             target=run_ocr_task,
             kwargs={
                 "task_id": task_id,
-                "input_mode": input_mode,
                 "pdf_path": pdf_path,
                 "images_dir": images_dir,
-                "image_paths": image_paths,
                 "api_key": api_key,
                 "secret_key": secret_key,
                 "layout": layout,

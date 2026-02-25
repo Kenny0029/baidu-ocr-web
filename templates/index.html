@@ -12,20 +12,12 @@
       <header class="hero">
         <p class="eyebrow">Baidu OCR Visual Console</p>
         <h1>文澜 OCR 工坊</h1>
-        <p class="subtitle">上传 PDF 或图片文件夹，填写百度 OCR Key，自动生成结构化 CSV。</p>
+        <p class="subtitle">上传 PDF，填写百度 OCR Key，自动生成结构化 CSV。</p>
       </header>
 
       <section class="panel">
         <form id="ocr-form">
           <div class="field-grid">
-            <label class="field">
-              <span>输入类型</span>
-              <select name="input_mode" id="input_mode">
-                <option value="pdf">PDF 文档</option>
-                <option value="images">图片文件夹</option>
-              </select>
-            </label>
-
             <label class="field">
               <span>版式排序</span>
               <select name="layout">
@@ -49,14 +41,7 @@
           <div class="upload-wrap" id="pdf_upload_wrap">
             <label class="field">
               <span>上传 PDF</span>
-              <input type="file" name="pdf_file" id="pdf_file" accept=".pdf,application/pdf">
-            </label>
-          </div>
-
-          <div class="upload-wrap is-hidden" id="images_upload_wrap">
-            <label class="field">
-              <span>上传图片文件夹</span>
-              <input type="file" name="image_files" id="image_files" accept="image/*" webkitdirectory directory multiple>
+              <input type="file" name="pdf_file" id="pdf_file" accept=".pdf,application/pdf" required>
             </label>
           </div>
 

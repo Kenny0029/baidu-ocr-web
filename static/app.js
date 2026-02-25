@@ -1,11 +1,7 @@
 "use strict";
 
 const form = document.getElementById("ocr-form");
-const inputModeEl = document.getElementById("input_mode");
-const pdfWrap = document.getElementById("pdf_upload_wrap");
-const imagesWrap = document.getElementById("images_upload_wrap");
 const pdfFileEl = document.getElementById("pdf_file");
-const imageFilesEl = document.getElementById("image_files");
 const startButton = document.getElementById("start_button");
 
 const statusPanel = document.getElementById("status_panel");
@@ -16,15 +12,6 @@ const pageStatusEl = document.getElementById("page_status");
 const downloadLinkEl = document.getElementById("download_link");
 
 let pollTimer = null;
-
-function setUploadMode(mode) {
-  const usePdf = mode === "pdf";
-  pdfWrap.classList.toggle("is-hidden", !usePdf);
-  imagesWrap.classList.toggle("is-hidden", usePdf);
-
-  pdfFileEl.required = usePdf;
-  imageFilesEl.required = !usePdf;
-}
 
 function resetStatus() {
   statusPanel.classList.remove("status-success", "status-failed");
@@ -74,24 +61,13 @@ async function pollTask(taskId) {
   }
 }
 
-inputModeEl.addEventListener("change", () => {
-  setUploadMode(inputModeEl.value);
-});
-
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   stopPolling();
   resetStatus();
   startButton.disabled = true;
 
-  const mode = inputModeEl.value;
-  if (mode === "images" && imageFilesEl.files.length === 0) {
-    statusPanel.classList.add("status-failed");
-    statusTextEl.textContent = "请先选择图片文件夹";
-    startButton.disabled = false;
-    return;
-  }
-  if (mode === "pdf" && pdfFileEl.files.length === 0) {
+  if (pdfFileEl.files.length === 0) {
     statusPanel.classList.add("status-failed");
     statusTextEl.textContent = "请先选择 PDF 文件";
     startButton.disabled = false;
@@ -122,5 +98,3 @@ form.addEventListener("submit", async (event) => {
     statusTextEl.textContent = error.message || "请求失败";
   }
 });
-
-setUploadMode(inputModeEl.value);
