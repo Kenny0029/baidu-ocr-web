@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 import os
-import re
 import threading
 import time
 import uuid
@@ -11,6 +10,7 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
+import fitz  # PyMuPDF
 from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
@@ -18,7 +18,6 @@ from ocr_pdf_to_csv import (
     OCRRequestError,
     build_rows,
     choose_layout,
-    convert_pdf_to_images,
     get_access_token,
     ocr_image,
 )
@@ -32,11 +31,6 @@ app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
-
-
-def natural_key(text: str) -> list[Any]:
-    parts = re.split(r"(\d+)", text)
-    return [int(part) if part.isdigit() else part.lower() for part in parts]
 
 
 def update_task(task_id: str, **updates: Any) -> None:
@@ -84,41 +78,62 @@ def run_ocr_task(
     try:
         update_task(task_id, status="running", progress=3, message="正在连接百度 OCR 服务")
         access_token = get_access_token(api_key=api_key, secret_key=secret_key, timeout=60.0)
+        document = fitz.open(pdf_path)
+        try:
+            total_pages = document.page_count
+            if total_pages <= 0:
+                raise OCRRequestError("PDF 没有可识别页面")
 
-        update_task(task_id, progress=8, message="正在将 PDF 转换为图片")
-        image_paths = convert_pdf_to_images(pdf_path=pdf_path, images_dir=images_dir, dpi=dpi)
-
-        if not image_paths:
-            raise OCRRequestError("未检测到可识别的图片")
-
-        ordered_images = sorted(image_paths, key=lambda p: natural_key(p.name))
-        total_pages = len(ordered_images)
-        update_task(
-            task_id,
-            pages_total=total_pages,
-            pages_done=0,
-            progress=10,
-            message=f"开始识别，共 {total_pages} 页",
-        )
-
-        for idx, image_path in enumerate(ordered_images, start=1):
-            payload = ocr_image(
-                image_path=image_path,
-                access_token=access_token,
-                timeout=60.0,
-                language_type=language_type,
-            )
-            words_result = payload.get("words_result") or []
-            page_layout = choose_layout(words_result=words_result, layout=layout)
-            rows.extend(build_rows(image_path=image_path, page_no=idx, words_result=words_result, layout=page_layout))
-
-            progress = min(98, int((idx / total_pages) * 88) + 10)
             update_task(
                 task_id,
-                pages_done=idx,
-                progress=progress,
-                message=f"正在识别第 {idx}/{total_pages} 页",
+                pages_total=total_pages,
+                pages_done=0,
+                progress=5,
+                message=f"已加载 PDF，共 {total_pages} 页",
             )
+
+            zoom = dpi / 72.0
+            matrix = fitz.Matrix(zoom, zoom)
+
+            for idx in range(1, total_pages + 1):
+                convert_progress = min(39, 5 + int(((idx - 1) / total_pages) * 34))
+                update_task(
+                    task_id,
+                    progress=convert_progress,
+                    message=f"正在转换第 {idx}/{total_pages} 页",
+                )
+
+                page = document.load_page(idx - 1)
+                pix = page.get_pixmap(matrix=matrix, alpha=False)
+                image_name = f"{pdf_path.stem}_page_{idx:04d}.png"
+                image_path = images_dir / image_name
+                pix.save(image_path)
+
+                ocr_progress = min(98, 40 + int((idx / total_pages) * 58))
+                update_task(
+                    task_id,
+                    progress=ocr_progress,
+                    message=f"正在识别第 {idx}/{total_pages} 页",
+                )
+
+                payload = ocr_image(
+                    image_path=image_path,
+                    access_token=access_token,
+                    timeout=60.0,
+                    language_type=language_type,
+                )
+                words_result = payload.get("words_result") or []
+                page_layout = choose_layout(words_result=words_result, layout=layout)
+                rows.extend(build_rows(image_path=image_path, page_no=idx, words_result=words_result, layout=page_layout))
+
+                update_task(
+                    task_id,
+                    pages_done=idx,
+                    progress=ocr_progress,
+                    message=f"正在识别第 {idx}/{total_pages} 页",
+                )
+        finally:
+            document.close()
 
         fieldnames = [
             "image_file",
@@ -186,7 +201,7 @@ def api_start() -> Any:
             raise OCRRequestError("layout 参数非法")
 
         language_type = (request.form.get("language_type") or "CHN_ENG").strip()
-        dpi_raw = (request.form.get("dpi") or "300").strip()
+        dpi_raw = (request.form.get("dpi") or "220").strip()
         dpi = int(dpi_raw)
         if dpi < 72 or dpi > 600:
             raise OCRRequestError("dpi 范围建议在 72-600")
