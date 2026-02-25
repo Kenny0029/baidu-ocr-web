@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+.venv/
+key.txt
+web_runs/
+*_images/
+
+*.csv
+*.pdf
+*.PDF
+*.log
+*.tmp
+*.swp

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>文澜 OCR 工坊</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body>
+    <div class="paper-bg"></div>
+    <main class="shell">
+      <header class="hero">
+        <p class="eyebrow">Baidu OCR Visual Console</p>
+        <h1>文澜 OCR 工坊</h1>
+        <p class="subtitle">上传 PDF 或图片文件夹，填写百度 OCR Key，自动生成结构化 CSV。</p>
+      </header>
+
+      <section class="panel">
+        <form id="ocr-form">
+          <div class="field-grid">
+            <label class="field">
+              <span>输入类型</span>
+              <select name="input_mode" id="input_mode">
+                <option value="pdf">PDF 文档</option>
+                <option value="images">图片文件夹</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>版式排序</span>
+              <select name="layout">
+                <option value="auto">自动判断</option>
+                <option value="horizontal">横排（上到下）</option>
+                <option value="vertical-rtl">竖排（右到左）</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>语言参数</span>
+              <input type="text" name="language_type" value="CHN_ENG" placeholder="例如 CHN_ENG">
+            </label>
+
+            <label class="field">
+              <span>PDF DPI</span>
+              <input type="number" name="dpi" min="72" max="600" value="300">
+            </label>
+          </div>
+
+          <div class="upload-wrap" id="pdf_upload_wrap">
+            <label class="field">
+              <span>上传 PDF</span>
+              <input type="file" name="pdf_file" id="pdf_file" accept=".pdf,application/pdf">
+            </label>
+          </div>
+
+          <div class="upload-wrap is-hidden" id="images_upload_wrap">
+            <label class="field">
+              <span>上传图片文件夹</span>
+              <input type="file" name="image_files" id="image_files" accept="image/*" webkitdirectory directory multiple>
+            </label>
+          </div>
+
+          <div class="field-grid">
+            <label class="field">
+              <span>API_KEY</span>
+              <input type="password" name="api_key" id="api_key" autocomplete="off" required>
+            </label>
+            <label class="field">
+              <span>SECRET_KEY</span>
+              <input type="password" name="secret_key" id="secret_key" autocomplete="off" required>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button type="submit" id="start_button">开始识别</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel status-panel" id="status_panel">
+        <h2>任务进度</h2>
+        <p id="status_text">等待任务开始</p>
+        <div class="progress-track" aria-label="OCR 识别进度">
+          <div class="progress-fill" id="progress_fill"></div>
+        </div>
+        <p class="progress-label"><span id="progress_value">0%</span> · <span id="page_status">0 / 0 页</span></p>
+        <a class="download-btn is-hidden" id="download_link" href="#">下载 CSV</a>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>
