@@ -8,6 +8,7 @@ const statusPanel = document.getElementById("status_panel");
 const statusTextEl = document.getElementById("status_text");
 const progressFillEl = document.getElementById("progress_fill");
 const progressValueEl = document.getElementById("progress_value");
+const phaseLabelEl = document.getElementById("phase_label");
 const pageStatusEl = document.getElementById("page_status");
 const downloadLinkEl = document.getElementById("download_link");
 
@@ -18,17 +19,45 @@ function resetStatus() {
   statusTextEl.textContent = "任务准备中";
   progressFillEl.style.width = "0%";
   progressValueEl.textContent = "0%";
-  pageStatusEl.textContent = "0 / 0 页";
+  phaseLabelEl.textContent = "阶段：等待中";
+  pageStatusEl.textContent = "读取页数中";
   downloadLinkEl.classList.add("is-hidden");
   downloadLinkEl.href = "#";
 }
 
+function phaseText(phase) {
+  const map = {
+    queued: "等待中",
+    authenticating: "连接中",
+    converting: "转换中",
+    recognizing: "识别中",
+    completed: "已完成",
+    failed: "失败",
+  };
+  return map[phase] || "处理中";
+}
+
 function updateStatus(payload) {
   const progress = Math.max(0, Math.min(100, Number(payload.progress || 0)));
+  const totalPages = Number(payload.pages_total || 0);
+  const convertDone = Number(payload.convert_done || 0);
+  const ocrDone = Number(payload.pages_done || 0);
+  const phase = payload.phase || "";
+
   progressFillEl.style.width = `${progress}%`;
   progressValueEl.textContent = `${progress}%`;
   statusTextEl.textContent = payload.message || "";
-  pageStatusEl.textContent = `${payload.pages_done || 0} / ${payload.pages_total || 0} 页`;
+  phaseLabelEl.textContent = `阶段：${phaseText(phase)}`;
+
+  if (totalPages <= 0) {
+    pageStatusEl.textContent = "读取页数中";
+    return;
+  }
+  if (phase === "converting") {
+    pageStatusEl.textContent = `转换 ${convertDone} / ${totalPages} 页`;
+    return;
+  }
+  pageStatusEl.textContent = `识别 ${ocrDone} / ${totalPages} 页`;
 }
 
 function stopPolling() {

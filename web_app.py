@@ -42,9 +42,11 @@ def create_task(task_id: str, output_name: str) -> None:
         TASKS[task_id] = {
             "task_id": task_id,
             "status": "queued",
+            "phase": "queued",
             "progress": 0,
             "message": "任务已创建",
             "pages_total": 0,
+            "convert_done": 0,
             "pages_done": 0,
             "rows_total": 0,
             "result_csv": "",
@@ -72,7 +74,9 @@ def convert_pdf_to_images_with_progress(
 
         update_task(
             task_id,
+            phase="converting",
             pages_total=total_pages,
+            convert_done=0,
             pages_done=0,
             progress=5,
             message=f"正在将 PDF 转换为图片 0/{total_pages}",
@@ -89,6 +93,8 @@ def convert_pdf_to_images_with_progress(
             convert_progress = min(45, 5 + int((idx / total_pages) * 40))
             update_task(
                 task_id,
+                phase="converting",
+                convert_done=idx,
                 progress=convert_progress,
                 message=f"正在将 PDF 转换为图片 {idx}/{total_pages}",
             )
@@ -114,7 +120,13 @@ def run_ocr_task(
     result_csv = run_dir / f"{task_id}_ocr.csv"
 
     try:
-        update_task(task_id, status="running", progress=3, message="正在连接百度 OCR 服务")
+        update_task(
+            task_id,
+            status="running",
+            phase="authenticating",
+            progress=3,
+            message="正在连接百度 OCR 服务",
+        )
         access_token = get_access_token(api_key=api_key, secret_key=secret_key, timeout=60.0)
         image_paths = convert_pdf_to_images_with_progress(
             pdf_path=pdf_path,
@@ -131,6 +143,7 @@ def run_ocr_task(
             ocr_progress = min(98, 45 + int((idx / total_pages) * 53))
             update_task(
                 task_id,
+                phase="recognizing",
                 progress=ocr_progress,
                 message=f"正在识别第 {idx}/{total_pages} 页",
             )
@@ -147,6 +160,7 @@ def run_ocr_task(
 
             update_task(
                 task_id,
+                phase="recognizing",
                 pages_done=idx,
                 progress=ocr_progress,
                 message=f"正在识别第 {idx}/{total_pages} 页",
@@ -172,7 +186,10 @@ def run_ocr_task(
         update_task(
             task_id,
             status="completed",
+            phase="completed",
             progress=100,
+            convert_done=total_pages,
+            pages_done=total_pages,
             rows_total=len(rows),
             result_csv=str(result_csv),
             message=f"识别完成，共 {len(rows)} 行文本",
@@ -182,6 +199,7 @@ def run_ocr_task(
         update_task(
             task_id,
             status="failed",
+            phase="failed",
             message=f"任务失败：{error_message}",
         )
 
@@ -268,9 +286,11 @@ def api_status(task_id: str) -> Any:
         payload = {
             "task_id": task["task_id"],
             "status": task["status"],
+            "phase": task.get("phase", ""),
             "progress": task["progress"],
             "message": task["message"],
             "pages_total": task["pages_total"],
+            "convert_done": task.get("convert_done", 0),
             "pages_done": task["pages_done"],
             "rows_total": task["rows_total"],
             "download_url": f"/api/download/{task_id}" if task["status"] == "completed" else "",
