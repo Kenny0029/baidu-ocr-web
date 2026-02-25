@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import threading
 import time
 import uuid
@@ -21,10 +22,15 @@ RUNS_DIR = BASE_DIR / "web_runs"
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+try:
+    max_upload_mb = max(50, int(os.getenv("OCR_WEB_MAX_UPLOAD_MB", "500")))
+except ValueError:
+    max_upload_mb = 500
+app.config["MAX_CONTENT_LENGTH"] = max_upload_mb * 1024 * 1024
 
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
+ALLOWED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 CSV_FIELDNAMES = [
     "image_file",
     "page_no",
@@ -71,6 +77,8 @@ def create_task(task_id: str, output_name: str) -> None:
             "output_name": output_name,
             "failed_pages": [],
             "image_paths": [],
+            "image_labels": [],
+            "source_mode": "pdf",
             "cancel_requested": False,
             "created_at": now,
             "updated_at": now,
@@ -133,6 +141,7 @@ def recognize_single_page(
     access_token: str,
     layout: str,
     language_type: str,
+    display_name: str | None = None,
 ) -> list[dict[str, Any]]:
     payload = ocr_image(
         image_path=image_path,
@@ -142,7 +151,25 @@ def recognize_single_page(
     )
     words_result = payload.get("words_result") or []
     page_layout = choose_layout(words_result=words_result, layout=layout)
-    return build_rows(image_path=image_path, page_no=page_no, words_result=words_result, layout=page_layout)
+    rows = build_rows(image_path=image_path, page_no=page_no, words_result=words_result, layout=page_layout)
+    if display_name:
+        for row in rows:
+            row["image_file"] = display_name
+    return rows
+
+
+def natural_sort_key(text: str) -> list[Any]:
+    normalized = (text or "").replace("\\", "/").lower()
+    parts = re.split(r"(\d+)", normalized)
+    key: list[Any] = []
+    for part in parts:
+        if not part:
+            continue
+        if part.isdigit():
+            key.append(int(part))
+        else:
+            key.append(part)
+    return key
 
 
 def convert_pdf_to_images_with_progress(
@@ -195,6 +222,44 @@ def convert_pdf_to_images_with_progress(
     return image_paths
 
 
+def save_image_uploads(images_dir: Path) -> tuple[list[Path], list[str], str]:
+    files = request.files.getlist("image_files")
+    if not files:
+        raise OCRRequestError("请上传图片文件夹")
+
+    relpaths = request.form.getlist("image_relpaths")
+    entries: list[tuple[str, Any]] = []
+
+    for idx, file in enumerate(files):
+        raw_name = (file.filename or "").strip()
+        raw_relpath = relpaths[idx].strip() if idx < len(relpaths) and relpaths[idx].strip() else raw_name
+        normalized_relpath = raw_relpath.replace("\\", "/").lstrip("/")
+        suffix = Path(normalized_relpath).suffix.lower()
+        if suffix not in ALLOWED_IMAGE_SUFFIXES:
+            continue
+        entries.append((normalized_relpath or f"image_{idx + 1:06d}{suffix or '.png'}", file))
+
+    if not entries:
+        raise OCRRequestError("未检测到可识别图片，请上传 png/jpg/jpeg/bmp/webp/tif/tiff")
+
+    entries.sort(key=lambda item: natural_sort_key(item[0]))
+
+    image_paths: list[Path] = []
+    image_labels: list[str] = []
+    for idx, (relpath, file) in enumerate(entries, start=1):
+        base_name = secure_filename(Path(relpath).name) or f"image_{idx:06d}.png"
+        saved_name = f"{idx:06d}_{base_name}"
+        image_path = images_dir / saved_name
+        file.save(image_path)
+        image_paths.append(image_path)
+        image_labels.append(relpath)
+
+    first_label = image_labels[0] if image_labels else "images"
+    first_root = Path(first_label).parts[0] if Path(first_label).parts else "images"
+    output_stem = secure_filename(first_root) or "images"
+    return image_paths, image_labels, output_stem
+
+
 def run_retry_task(
     *,
     task_id: str,
@@ -209,7 +274,9 @@ def run_retry_task(
 
     failed_pages = [parse_int(p, 0) for p in (snapshot.get("failed_pages") or []) if parse_int(p, 0) > 0]
     image_paths_raw = snapshot.get("image_paths") or []
+    image_labels_raw = snapshot.get("image_labels") or []
     image_paths = [Path(path) for path in image_paths_raw]
+    image_labels = [str(label) for label in image_labels_raw]
     result_csv = Path(snapshot.get("result_csv") or "")
     if not failed_pages or not image_paths or not result_csv:
         update_task(task_id, message="没有可重试的失败页", phase="failed")
@@ -262,6 +329,7 @@ def run_retry_task(
                         access_token=access_token,
                         layout=layout,
                         language_type=language_type,
+                        display_name=image_labels[page_no - 1] if page_no - 1 < len(image_labels) else image_path.name,
                     )
                 )
             except Exception:
@@ -342,7 +410,15 @@ def run_ocr_task(
             dpi=dpi,
         )
         init_csv(result_csv)
-        update_task(task_id, image_paths=[str(path) for path in image_paths], result_csv=str(result_csv), rows_total=0)
+        image_labels = [path.name for path in image_paths]
+        update_task(
+            task_id,
+            image_paths=[str(path) for path in image_paths],
+            image_labels=image_labels,
+            result_csv=str(result_csv),
+            rows_total=0,
+            source_mode="pdf",
+        )
 
         total_pages = len(image_paths)
         if total_pages <= 0:
@@ -366,6 +442,7 @@ def run_ocr_task(
                     access_token=access_token,
                     layout=layout,
                     language_type=language_type,
+                    display_name=image_labels[idx - 1] if idx - 1 < len(image_labels) else image_path.name,
                 )
                 append_rows_to_csv(result_csv, page_rows)
                 rows_total += len(page_rows)
@@ -419,6 +496,121 @@ def run_ocr_task(
         )
 
 
+def run_ocr_images_task(
+    *,
+    task_id: str,
+    image_paths: list[Path],
+    image_labels: list[str],
+    api_key: str,
+    secret_key: str,
+    layout: str,
+    language_type: str,
+) -> None:
+    failed_pages: list[int] = []
+    run_dir = RUNS_DIR / task_id
+    result_csv = run_dir / f"{task_id}_ocr.csv"
+    rows_total = 0
+
+    try:
+        total_pages = len(image_paths)
+        if total_pages <= 0:
+            raise OCRRequestError("未检测到可识别图片")
+
+        update_task(
+            task_id,
+            status="running",
+            phase="authenticating",
+            progress=3,
+            pages_total=total_pages,
+            convert_done=total_pages,
+            pages_done=0,
+            message="正在连接百度 OCR 服务",
+        )
+        access_token = get_access_token(api_key=api_key, secret_key=secret_key, timeout=60.0)
+
+        init_csv(result_csv)
+        update_task(
+            task_id,
+            image_paths=[str(path) for path in image_paths],
+            image_labels=image_labels,
+            result_csv=str(result_csv),
+            rows_total=0,
+            source_mode="images",
+            phase="recognizing",
+            progress=8,
+            message=f"正在识别第 0/{total_pages} 页",
+        )
+
+        for idx, image_path in enumerate(image_paths, start=1):
+            if is_cancel_requested(task_id):
+                raise TaskCancelledError("任务已取消")
+            ocr_progress = min(98, 8 + int((idx / total_pages) * 90))
+            update_task(
+                task_id,
+                phase="recognizing",
+                progress=ocr_progress,
+                message=f"正在识别第 {idx}/{total_pages} 页",
+            )
+
+            try:
+                page_rows = recognize_single_page(
+                    image_path=image_path,
+                    page_no=idx,
+                    access_token=access_token,
+                    layout=layout,
+                    language_type=language_type,
+                    display_name=image_labels[idx - 1] if idx - 1 < len(image_labels) else image_path.name,
+                )
+                append_rows_to_csv(result_csv, page_rows)
+                rows_total += len(page_rows)
+            except Exception:
+                failed_pages.append(idx)
+
+            update_task(
+                task_id,
+                phase="recognizing",
+                pages_done=idx,
+                progress=ocr_progress,
+                rows_total=rows_total,
+                message=f"正在识别第 {idx}/{total_pages} 页",
+            )
+
+        if failed_pages:
+            update_task(
+                task_id,
+                status="completed_with_errors",
+                phase="completed_with_errors",
+                progress=100,
+                pages_done=total_pages,
+                rows_total=rows_total,
+                result_csv=str(result_csv),
+                failed_pages=failed_pages,
+                message=f"识别完成，失败 {len(failed_pages)} 页，可重试失败页",
+            )
+        else:
+            update_task(
+                task_id,
+                status="completed",
+                phase="completed",
+                progress=100,
+                pages_done=total_pages,
+                rows_total=rows_total,
+                result_csv=str(result_csv),
+                failed_pages=[],
+                message=f"识别完成，共 {rows_total} 行文本",
+            )
+    except TaskCancelledError as exc:
+        update_task(task_id, status="canceled", phase="canceled", message=str(exc))
+    except Exception as exc:
+        error_message = str(exc).strip() or exc.__class__.__name__
+        update_task(
+            task_id,
+            status="failed",
+            phase="failed",
+            message=f"任务失败：{error_message}",
+        )
+
+
 def save_pdf_upload(task_dir: Path) -> Path:
     file = request.files.get("pdf_file")
     if file is None or not file.filename:
@@ -441,6 +633,10 @@ def index() -> str:
 @app.post("/api/start")
 def api_start() -> Any:
     try:
+        source_mode = (request.form.get("source_mode") or "pdf").strip()
+        if source_mode not in {"pdf", "images"}:
+            raise OCRRequestError("source_mode 参数非法")
+
         api_key = (request.form.get("api_key") or "").strip()
         secret_key = (request.form.get("secret_key") or "").strip()
         if not api_key or not secret_key:
@@ -451,11 +647,6 @@ def api_start() -> Any:
             raise OCRRequestError("layout 参数非法")
 
         language_type = (request.form.get("language_type") or "CHN_ENG").strip()
-        dpi_raw = (request.form.get("dpi") or "300").strip()
-        dpi = int(dpi_raw)
-        if dpi < 72 or dpi > 600:
-            raise OCRRequestError("dpi 范围建议在 72-600")
-
         task_id = uuid.uuid4().hex
         run_dir = RUNS_DIR / task_id
         input_dir = run_dir / "input"
@@ -463,24 +654,48 @@ def api_start() -> Any:
         input_dir.mkdir(parents=True, exist_ok=True)
         images_dir.mkdir(parents=True, exist_ok=True)
 
-        pdf_path = save_pdf_upload(input_dir)
-        output_name = f"{pdf_path.stem}_ocr.csv"
+        if source_mode == "pdf":
+            dpi_raw = (request.form.get("dpi") or "300").strip()
+            dpi = int(dpi_raw)
+            if dpi < 72 or dpi > 600:
+                raise OCRRequestError("dpi 范围建议在 72-600")
 
-        create_task(task_id=task_id, output_name=output_name)
-        thread = threading.Thread(
-            target=run_ocr_task,
-            kwargs={
-                "task_id": task_id,
-                "pdf_path": pdf_path,
-                "images_dir": images_dir,
-                "api_key": api_key,
-                "secret_key": secret_key,
-                "layout": layout,
-                "language_type": language_type,
-                "dpi": dpi,
-            },
-            daemon=True,
-        )
+            pdf_path = save_pdf_upload(input_dir)
+            output_name = f"{pdf_path.stem}_ocr.csv"
+            create_task(task_id=task_id, output_name=output_name)
+            update_task(task_id, source_mode="pdf")
+            thread = threading.Thread(
+                target=run_ocr_task,
+                kwargs={
+                    "task_id": task_id,
+                    "pdf_path": pdf_path,
+                    "images_dir": images_dir,
+                    "api_key": api_key,
+                    "secret_key": secret_key,
+                    "layout": layout,
+                    "language_type": language_type,
+                    "dpi": dpi,
+                },
+                daemon=True,
+            )
+        else:
+            image_paths, image_labels, output_stem = save_image_uploads(images_dir)
+            output_name = f"{output_stem}_ocr.csv"
+            create_task(task_id=task_id, output_name=output_name)
+            update_task(task_id, source_mode="images")
+            thread = threading.Thread(
+                target=run_ocr_images_task,
+                kwargs={
+                    "task_id": task_id,
+                    "image_paths": image_paths,
+                    "image_labels": image_labels,
+                    "api_key": api_key,
+                    "secret_key": secret_key,
+                    "layout": layout,
+                    "language_type": language_type,
+                },
+                daemon=True,
+            )
         thread.start()
 
         return jsonify({"task_id": task_id})
@@ -550,6 +765,7 @@ def api_status(task_id: str) -> Any:
         payload = {
             "task_id": task["task_id"],
             "status": task["status"],
+            "source_mode": task.get("source_mode", "pdf"),
             "phase": task.get("phase", ""),
             "progress": task["progress"],
             "message": task["message"],

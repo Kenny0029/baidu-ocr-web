@@ -134,6 +134,12 @@ button:focus {
   margin-top: 14px;
 }
 
+.hint-text {
+  margin: 10px 0 0;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
 .is-hidden {
   display: none !important;
 }

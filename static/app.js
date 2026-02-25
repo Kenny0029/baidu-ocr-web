@@ -1,7 +1,12 @@
 "use strict";
 
 const form = document.getElementById("ocr-form");
+const sourceModeEl = document.getElementById("source_mode");
 const pdfFileEl = document.getElementById("pdf_file");
+const imageFilesEl = document.getElementById("image_files");
+const pdfUploadWrap = document.getElementById("pdf_upload_wrap");
+const imagesUploadWrap = document.getElementById("images_upload_wrap");
+const dpiFieldEl = document.getElementById("dpi_field");
 const startButton = document.getElementById("start_button");
 const cancelButton = document.getElementById("cancel_button");
 const retryButton = document.getElementById("retry_button");
@@ -9,6 +14,7 @@ const apiKeyEl = document.getElementById("api_key");
 const secretKeyEl = document.getElementById("secret_key");
 const layoutEl = form.querySelector("select[name='layout']");
 const languageTypeEl = form.querySelector("input[name='language_type']");
+const dpiEl = form.querySelector("input[name='dpi']");
 
 const statusPanel = document.getElementById("status_panel");
 const statusTextEl = document.getElementById("status_text");
@@ -21,6 +27,60 @@ const downloadLinkEl = document.getElementById("download_link");
 let pollTimer = null;
 let currentTaskId = "";
 let pollFailures = 0;
+
+function naturalCompare(left, right) {
+  return left.localeCompare(right, "zh-CN", {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function getRelativePath(file) {
+  return String(file.webkitRelativePath || file.name || "").replace(/\\/g, "/");
+}
+
+function isImageFile(file) {
+  const name = String(file.name || "").toLowerCase();
+  return /\.(png|jpg|jpeg|bmp|webp|tif|tiff)$/.test(name);
+}
+
+function getSortedImageFiles() {
+  const files = Array.from(imageFilesEl.files || []).filter(isImageFile);
+  files.sort((a, b) => naturalCompare(getRelativePath(a), getRelativePath(b)));
+  return files;
+}
+
+function syncSourceModeUI() {
+  const sourceMode = sourceModeEl.value || "pdf";
+  const usePdf = sourceMode === "pdf";
+  pdfUploadWrap.classList.toggle("is-hidden", !usePdf);
+  imagesUploadWrap.classList.toggle("is-hidden", usePdf);
+  dpiFieldEl.classList.toggle("is-hidden", !usePdf);
+  pdfFileEl.required = usePdf;
+}
+
+function buildStartFormData() {
+  const sourceMode = sourceModeEl.value || "pdf";
+  const formData = new FormData();
+  formData.append("source_mode", sourceMode);
+  formData.append("layout", layoutEl.value || "auto");
+  formData.append("language_type", languageTypeEl.value || "CHN_ENG");
+  formData.append("dpi", dpiEl.value || "300");
+  formData.append("api_key", apiKeyEl.value || "");
+  formData.append("secret_key", secretKeyEl.value || "");
+
+  if (sourceMode === "pdf") {
+    formData.append("pdf_file", pdfFileEl.files[0]);
+    return formData;
+  }
+
+  const sortedFiles = getSortedImageFiles();
+  sortedFiles.forEach((file) => {
+    formData.append("image_files", file, file.name);
+    formData.append("image_relpaths", getRelativePath(file));
+  });
+  return formData;
+}
 
 function resetStatus() {
   statusPanel.classList.remove("status-success", "status-failed");
@@ -135,16 +195,23 @@ form.addEventListener("submit", async (event) => {
   stopPolling();
   resetStatus();
   startButton.disabled = true;
-
-  if (pdfFileEl.files.length === 0) {
+  const sourceMode = sourceModeEl.value || "pdf";
+  if (sourceMode === "pdf") {
+    if (pdfFileEl.files.length === 0) {
+      statusPanel.classList.add("status-failed");
+      statusTextEl.textContent = "请先选择 PDF 文件";
+      startButton.disabled = false;
+      return;
+    }
+  } else if (getSortedImageFiles().length === 0) {
     statusPanel.classList.add("status-failed");
-    statusTextEl.textContent = "请先选择 PDF 文件";
+    statusTextEl.textContent = "请先选择图片文件夹";
     startButton.disabled = false;
     return;
   }
 
   try {
-    const formData = new FormData(form);
+    const formData = buildStartFormData();
     const response = await fetch("/api/start", { method: "POST", body: formData });
     const payload = await response.json();
     if (!response.ok) {
@@ -195,6 +262,12 @@ cancelButton.addEventListener("click", async () => {
     statusTextEl.textContent = error.message || "取消任务失败";
   }
 });
+
+sourceModeEl.addEventListener("change", () => {
+  syncSourceModeUI();
+});
+
+syncSourceModeUI();
 
 retryButton.addEventListener("click", async () => {
   if (!currentTaskId) {

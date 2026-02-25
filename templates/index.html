@@ -12,12 +12,20 @@
       <header class="hero">
         <p class="eyebrow">Baidu OCR Visual Console</p>
         <h1>文澜 OCR 工坊</h1>
-        <p class="subtitle">上传 PDF，填写百度 OCR Key，自动生成结构化 CSV。</p>
+        <p class="subtitle">上传 PDF 或图片文件夹，填写百度 OCR Key，自动生成结构化 CSV。</p>
       </header>
 
       <section class="panel">
         <form id="ocr-form">
           <div class="field-grid">
+            <label class="field">
+              <span>上传方式</span>
+              <select name="source_mode" id="source_mode">
+                <option value="pdf">PDF 文件（建议 ≤ 100 页）</option>
+                <option value="images">图片文件夹（建议 > 100 页）</option>
+              </select>
+            </label>
+
             <label class="field">
               <span>版式排序</span>
               <select name="layout">
@@ -32,7 +40,7 @@
               <input type="text" name="language_type" value="CHN_ENG" placeholder="例如 CHN_ENG">
             </label>
 
-            <label class="field">
+            <label class="field" id="dpi_field">
               <span>PDF DPI</span>
               <input type="number" name="dpi" min="72" max="600" value="300">
             </label>
@@ -44,6 +52,15 @@
               <input type="file" name="pdf_file" id="pdf_file" accept=".pdf,application/pdf" required>
             </label>
           </div>
+
+          <div class="upload-wrap is-hidden" id="images_upload_wrap">
+            <label class="field">
+              <span>上传图片文件夹</span>
+              <input type="file" name="image_files" id="image_files" webkitdirectory directory multiple accept=".png,.jpg,.jpeg,.bmp,.webp,.tif,.tiff">
+            </label>
+          </div>
+
+          <p class="hint-text">建议：100 页以内直接上传 PDF；超过 100 页建议先本地转图片后上传文件夹。</p>
 
           <div class="field-grid">
             <label class="field">
