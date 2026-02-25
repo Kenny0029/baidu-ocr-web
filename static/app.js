@@ -20,6 +20,7 @@ const downloadLinkEl = document.getElementById("download_link");
 
 let pollTimer = null;
 let currentTaskId = "";
+let pollFailures = 0;
 
 function resetStatus() {
   statusPanel.classList.remove("status-success", "status-failed");
@@ -92,11 +93,12 @@ function stopPolling() {
 }
 
 async function pollTask(taskId) {
-  const response = await fetch(`/api/status/${taskId}`);
+  const response = await fetch(`/api/status/${encodeURIComponent(taskId)}`);
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.error || "获取任务状态失败");
   }
+  pollFailures = 0;
   updateStatus(payload);
   cancelButton.classList.toggle("is-hidden", !payload.can_cancel);
   retryButton.classList.toggle("is-hidden", !payload.can_retry);
@@ -151,15 +153,21 @@ form.addEventListener("submit", async (event) => {
 
     const taskId = payload.task_id;
     currentTaskId = taskId;
+    pollFailures = 0;
     cancelButton.classList.remove("is-hidden");
     retryButton.classList.add("is-hidden");
     await pollTask(taskId);
     pollTimer = window.setInterval(() => {
       pollTask(taskId).catch((error) => {
-        stopPolling();
-        startButton.disabled = false;
-        statusPanel.classList.add("status-failed");
-        statusTextEl.textContent = error.message || "任务状态更新失败";
+        pollFailures += 1;
+        if (pollFailures >= 6) {
+          stopPolling();
+          startButton.disabled = false;
+          statusPanel.classList.add("status-failed");
+          statusTextEl.textContent = error.message || "任务状态更新失败";
+          return;
+        }
+        statusTextEl.textContent = "状态读取短暂异常，正在自动重试...";
       });
     }, 1200);
   } catch (error) {
@@ -215,11 +223,16 @@ retryButton.addEventListener("click", async () => {
     stopPolling();
     pollTimer = window.setInterval(() => {
       pollTask(currentTaskId).catch((error) => {
-        stopPolling();
-        startButton.disabled = false;
-        retryButton.disabled = false;
-        statusPanel.classList.add("status-failed");
-        statusTextEl.textContent = error.message || "任务状态更新失败";
+        pollFailures += 1;
+        if (pollFailures >= 6) {
+          stopPolling();
+          startButton.disabled = false;
+          retryButton.disabled = false;
+          statusPanel.classList.add("status-failed");
+          statusTextEl.textContent = error.message || "任务状态更新失败";
+          return;
+        }
+        statusTextEl.textContent = "状态读取短暂异常，正在自动重试...";
       });
     }, 1200);
   } catch (error) {

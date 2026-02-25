@@ -98,6 +98,20 @@ def write_rows_to_csv(csv_path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def init_csv(csv_path: Path) -> None:
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELDNAMES)
+        writer.writeheader()
+
+
+def append_rows_to_csv(csv_path: Path, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    with csv_path.open("a", encoding="utf-8-sig", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELDNAMES)
+        writer.writerows(rows)
+
+
 def read_rows_from_csv(csv_path: Path) -> list[dict[str, Any]]:
     if not csv_path.exists():
         return []
@@ -307,10 +321,10 @@ def run_ocr_task(
     language_type: str,
     dpi: int,
 ) -> None:
-    rows: list[dict[str, Any]] = []
     failed_pages: list[int] = []
     run_dir = RUNS_DIR / task_id
     result_csv = run_dir / f"{task_id}_ocr.csv"
+    rows_total = 0
 
     try:
         update_task(
@@ -327,7 +341,8 @@ def run_ocr_task(
             task_id=task_id,
             dpi=dpi,
         )
-        update_task(task_id, image_paths=[str(path) for path in image_paths], result_csv=str(result_csv))
+        init_csv(result_csv)
+        update_task(task_id, image_paths=[str(path) for path in image_paths], result_csv=str(result_csv), rows_total=0)
 
         total_pages = len(image_paths)
         if total_pages <= 0:
@@ -345,15 +360,15 @@ def run_ocr_task(
             )
 
             try:
-                rows.extend(
-                    recognize_single_page(
-                        image_path=image_path,
-                        page_no=idx,
-                        access_token=access_token,
-                        layout=layout,
-                        language_type=language_type,
-                    )
+                page_rows = recognize_single_page(
+                    image_path=image_path,
+                    page_no=idx,
+                    access_token=access_token,
+                    layout=layout,
+                    language_type=language_type,
                 )
+                append_rows_to_csv(result_csv, page_rows)
+                rows_total += len(page_rows)
             except Exception:
                 failed_pages.append(idx)
 
@@ -362,10 +377,9 @@ def run_ocr_task(
                 phase="recognizing",
                 pages_done=idx,
                 progress=ocr_progress,
+                rows_total=rows_total,
                 message=f"正在识别第 {idx}/{total_pages} 页",
             )
-
-        write_rows_to_csv(result_csv, rows)
 
         if failed_pages:
             update_task(
@@ -375,7 +389,7 @@ def run_ocr_task(
                 progress=100,
                 convert_done=total_pages,
                 pages_done=total_pages,
-                rows_total=len(rows),
+                rows_total=rows_total,
                 result_csv=str(result_csv),
                 failed_pages=failed_pages,
                 message=f"识别完成，失败 {len(failed_pages)} 页，可重试失败页",
@@ -388,15 +402,12 @@ def run_ocr_task(
                 progress=100,
                 convert_done=total_pages,
                 pages_done=total_pages,
-                rows_total=len(rows),
+                rows_total=rows_total,
                 result_csv=str(result_csv),
                 failed_pages=[],
-                message=f"识别完成，共 {len(rows)} 行文本",
+                message=f"识别完成，共 {rows_total} 行文本",
             )
     except TaskCancelledError as exc:
-        if rows:
-            write_rows_to_csv(result_csv, rows)
-            update_task(task_id, result_csv=str(result_csv), rows_total=len(rows))
         update_task(task_id, status="canceled", phase="canceled", message=str(exc))
     except Exception as exc:
         error_message = str(exc).strip() or exc.__class__.__name__
@@ -551,7 +562,11 @@ def api_status(task_id: str) -> Any:
             "failed_pages_count": len(task.get("failed_pages", [])),
             "can_cancel": task["status"] in {"queued", "running"},
             "can_retry": task["status"] in {"completed_with_errors", "failed", "canceled"} and len(task.get("failed_pages", [])) > 0,
-            "download_url": f"/api/download/{task_id}" if task["status"] in {"completed", "completed_with_errors", "canceled"} else "",
+            "download_url": (
+                f"/api/download/{task_id}"
+                if task.get("result_csv") and parse_int(task.get("rows_total"), 0) > 0
+                else ""
+            ),
         }
     return jsonify(payload)
 
@@ -562,9 +577,12 @@ def api_download(task_id: str) -> Any:
         task = TASKS.get(task_id)
         if not task:
             return jsonify({"error": "task not found"}), 404
-        if task["status"] not in {"completed", "completed_with_errors", "canceled"}:
-            return jsonify({"error": "task not completed"}), 400
-        csv_path = Path(task["result_csv"])
+        result_csv = (task.get("result_csv") or "").strip()
+        if not result_csv:
+            return jsonify({"error": "暂无可下载结果"}), 400
+        if parse_int(task.get("rows_total"), 0) <= 0:
+            return jsonify({"error": "当前尚无识别结果"}), 400
+        csv_path = Path(result_csv)
         output_name = task.get("output_name") or f"{task_id}_ocr.csv"
 
     if not csv_path.exists():
